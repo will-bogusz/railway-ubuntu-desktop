@@ -94,7 +94,7 @@ setpriv --reuid=dev --regid=dev --init-groups --reset-env \
   env HOME="$HOME_DIR" USER=dev DISPLAY=":${DISPLAY_NUM}" \
   /usr/bin/Xvnc ":${DISPLAY_NUM}" \
     -geometry "$RES" -depth 24 \
-    -interface 127.0.0.1 -websocketPort "$VNC_PORT" -sslOnly 0 -disableBasicAuth \
+    -interface 127.0.0.1 -websocketPort "$VNC_PORT" -httpd /usr/share/kasmvnc/www -sslOnly 0 -DisableBasicAuth 1 \
     -SecurityTypes None -AlwaysShared -PublicIP 127.0.0.1 \
     -RectThreads 0 -FrameRate 30 \
     -http-header Cross-Origin-Embedder-Policy=require-corp \
