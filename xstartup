@@ -1,6 +1,9 @@
 #!/bin/sh
-# Session started by Xvnc for user dev. XFCE with its own dbus.
+# Session started by the entrypoint for user dev: XFCE on its own session bus.
+# dbus-run-session exits when startxfce4 does (Log Out), so the entrypoint's
+# respawn loop sees the end of the session; dbus-launch --exit-with-session
+# lingered after Log Out and left a black screen.
 unset SESSION_MANAGER DBUS_SESSION_BUS_ADDRESS
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_TYPE=x11
 xsetroot -solid '#2e3440' 2>/dev/null || true
-exec dbus-launch --exit-with-session startxfce4
+exec dbus-run-session -- startxfce4

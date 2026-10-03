@@ -11,7 +11,7 @@ Image behind the Railway template **Ubuntu Desktop (Browser)** (`railway.com/dep
 | `RESOLUTION` | no (`1440x900`) | Xvnc geometry `WIDTHxHEIGHT` |
 | `TZ` | no | zoneinfo name |
 
-Processes: `Xvnc :1` (loopback :6901, `-SecurityTypes None -DisableBasicAuth 1`, nginx is the gate), XFCE session as `dev`, `nginx` on `$PORT`. Exits when Xvnc or nginx dies. Measured: 135 MiB idle on Docker, 195 MiB idle on Railway; +400–700 MiB with Firefox.
+Processes: `Xvnc :1` (loopback :6901, `-SecurityTypes None -DisableBasicAuth 1`, nginx is the gate), XFCE session as `dev`, `nginx` on `$PORT`. Each runs under a respawn loop: XFCE *Log Out* starts a fresh session, and a killed process is restarted in-container; the container stops only on SIGTERM (bounded: TERM, 1 s, KILL, exit 0). `RESOLUTION` tolerates `1920X1080`/spaces and falls back to 1440x900 when unparseable. Measured: 135 MiB idle on Docker, 166–195 MiB idle on Railway; Firefox adds ~300–600 MiB, so on Free (0.5 GB) Firefox is OOM-killed at launch (the desktop stays up) and Trial (1 GB) fits a few tabs.
 
 ## Build
 

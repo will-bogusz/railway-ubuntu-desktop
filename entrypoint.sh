@@ -1,20 +1,32 @@
 #!/bin/bash
 # Boot: seed the home volume, then run Xvnc (KasmVNC, loopback, no auth of its
 # own) with XFCE, and nginx on $PORT with basic auth dev:$PASSWORD in front.
-# /healthz is open and only answers once Xvnc's HTTP server does. Exits when
-# either process dies so Railway's restart policy acts. Never prints a secret.
+# /healthz is open and only answers once Xvnc's HTTP server does. Xvnc, the
+# XFCE session and nginx each run under a respawn loop: Log Out from the XFCE
+# menu starts a fresh session, and a killed process comes back instead of
+# taking the container down (Railway records every exit after a kill as a
+# crash). The container stops only on SIGTERM. Never prints a secret.
 set -euo pipefail
 
 HOME_DIR=/home/dev
 PORT="${PORT:-8080}"
 VNC_PORT=6901
 DISPLAY_NUM=1
-RES="${RESOLUTION:-1440x900}"
+# Forgive the usual hand edits ("1920X1080", " 1920x1080 ") instead of
+# crash-looping on them; anything else falls back to the default.
+RES="$(printf '%s' "${RESOLUTION:-1440x900}" | tr -d '[:space:]' | tr 'X*' 'xx')"
 
 fail() { echo "desktop: $*" >&2; sleep 3; exit 1; }
 [ -n "${PASSWORD:-}" ] || fail "PASSWORD is empty. Set it in the service's Variables tab (the template generates one) and redeploy."
 case "$PORT" in ''|*[!0-9]*) fail "PORT must be a number, got '$PORT'";; esac
-case "$RES" in [0-9]*x[0-9]*) ;; *) fail "RESOLUTION must look like 1440x900, got '$RES'";; esac
+case "$RES" in
+  [1-9]*x[1-9]*) case "${RES%%x*}${RES#*x}" in *[!0-9]*) RES=;; esac ;;
+  *) RES= ;;
+esac
+if [ -z "$RES" ]; then
+  echo "desktop: RESOLUTION must look like 1440x900, got '${RESOLUTION:-}'; using 1440x900" >&2
+  RES=1440x900
+fi
 
 # --- home volume -----------------------------------------------------------
 mkdir -p "$HOME_DIR"
@@ -29,7 +41,7 @@ install -o dev -g dev -m 0755 /etc/devbox/xstartup "$HOME_DIR/.vnc/xstartup"
 install -d -o dev -g dev -m 0755 "$HOME_DIR/.config"
 # KasmVNC insists on a user password file even with SecurityTypes None.
 echo "$PASSWORD" | setpriv --reuid=dev --regid=dev --init-groups vncpasswd -u dev -w -f "$HOME_DIR/.kasmpasswd" >/dev/null 2>&1 || true
-rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
+X_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM}"
 
 # --- environment for the desktop session -----------------------------------
 : > /run/desktop-env
@@ -87,40 +99,72 @@ NGX
 nginx -t -q -c /run/desktop-nginx.conf
 
 # --- start -----------------------------------------------------------------
+# supervise NAME CMD...: run CMD in the background and respawn it whenever it
+# exits. The supervisor's own PID goes into PIDS for shutdown.
+PIDS=()
+supervise() {
+  local name=$1; shift
+  (
+    child=
+    trap '[ -n "$child" ] && kill "$child" 2>/dev/null; exit 0' TERM INT
+    while :; do
+      "$@" &
+      child=$!
+      wait "$child" && st=0 || st=$?
+      echo "desktop: $name exited with status $st; restarting it in 2 s" >&2
+      sleep 2
+    done
+  ) &
+  PIDS+=("$!")
+}
+
 # Xvnc serves the KasmVNC web client itself on VNC_PORT (plain http, loopback);
 # nginx adds auth and TLS termination is Railway's. -SecurityTypes None because
 # nginx is the gate; -AlwaysShared so a second tab does not kick the first.
-setpriv --reuid=dev --regid=dev --init-groups --reset-env \
-  env HOME="$HOME_DIR" USER=dev DISPLAY=":${DISPLAY_NUM}" \
-  /usr/bin/Xvnc ":${DISPLAY_NUM}" \
-    -geometry "$RES" -depth 24 \
-    -interface 127.0.0.1 -websocketPort "$VNC_PORT" -httpd /usr/share/kasmvnc/www -sslOnly 0 -DisableBasicAuth 1 \
-    -SecurityTypes None -AlwaysShared -PublicIP 127.0.0.1 \
-    -RectThreads 0 -FrameRate 30 \
-    -http-header Cross-Origin-Embedder-Policy=require-corp \
-    -http-header Cross-Origin-Opener-Policy=same-origin \
-    -Log '*:stderr:10' &
-XVNC_PID=$!
+run_xvnc() {
+  rm -f "/tmp/.X${DISPLAY_NUM}-lock" "$X_SOCKET"
+  setpriv --reuid=dev --regid=dev --init-groups --reset-env \
+    env HOME="$HOME_DIR" USER=dev DISPLAY=":${DISPLAY_NUM}" \
+    /usr/bin/Xvnc ":${DISPLAY_NUM}" \
+      -geometry "$RES" -depth 24 \
+      -interface 127.0.0.1 -websocketPort "$VNC_PORT" -httpd /usr/share/kasmvnc/www -sslOnly 0 -DisableBasicAuth 1 \
+      -SecurityTypes None -AlwaysShared -PublicIP 127.0.0.1 \
+      -RectThreads 0 -FrameRate 30 \
+      -http-header Cross-Origin-Embedder-Policy=require-corp \
+      -http-header Cross-Origin-Opener-Policy=same-origin \
+      -Log '*:stderr:10'
+}
 
-for i in $(seq 1 50); do [ -S "/tmp/.X11-unix/X${DISPLAY_NUM}" ] && break; sleep 0.2; done
-[ -S "/tmp/.X11-unix/X${DISPLAY_NUM}" ] || fail "Xvnc did not start"
+# The XFCE session; it ends on Log Out (or when Xvnc goes), then respawns.
+run_session() {
+  until [ -S "$X_SOCKET" ]; do sleep 0.5; done
+  setpriv --reuid=dev --regid=dev --init-groups --reset-env \
+    env HOME="$HOME_DIR" USER=dev DISPLAY=":${DISPLAY_NUM}" SHELL=/bin/bash \
+        XDG_RUNTIME_DIR=/tmp/runtime-dev LANG=C.UTF-8 \
+    bash -lc "mkdir -p /tmp/runtime-dev && chmod 0700 /tmp/runtime-dev && exec $HOME_DIR/.vnc/xstartup" \
+    >/dev/stderr 2>&1
+}
 
-setpriv --reuid=dev --regid=dev --init-groups --reset-env \
-  env HOME="$HOME_DIR" USER=dev DISPLAY=":${DISPLAY_NUM}" SHELL=/bin/bash \
-      XDG_RUNTIME_DIR=/tmp/runtime-dev LANG=C.UTF-8 \
-  bash -lc "mkdir -p /tmp/runtime-dev && chmod 0700 /tmp/runtime-dev && exec $HOME_DIR/.vnc/xstartup" \
-  >/dev/stderr 2>&1 &
-SESSION_PID=$!
-
-nginx -c /run/desktop-nginx.conf -g 'daemon off;' &
-NGINX_PID=$!
+supervise Xvnc run_xvnc
+for i in $(seq 1 50); do [ -S "$X_SOCKET" ] && break; sleep 0.2; done
+[ -S "$X_SOCKET" ] || fail "Xvnc did not start"
+supervise session run_session
+supervise nginx nginx -c /run/desktop-nginx.conf -g 'daemon off;'
 
 echo "desktop: ubuntu $(. /etc/os-release && echo "$VERSION_ID") | xfce | kasmvnc $(dpkg-query -W -f='${Version}' kasmvncserver) | firefox $(firefox --version 2>/dev/null | awk '{print $3}')"
 [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ] && echo "desktop: open https://${RAILWAY_PUBLIC_DOMAIN}/  (user dev)" || echo "desktop: listening on port ${PORT} (user dev)"
 echo "desktop: password = PASSWORD in the service's Variables tab; /home/dev is on the volume; resolution ${RES}"
 
-shutdown() { kill "$XVNC_PID" "$SESSION_PID" "$NGINX_PID" 2>/dev/null || true; wait; exit "${1:-0}"; }
-trap 'shutdown 0' TERM INT
-wait -n "$XVNC_PID" "$NGINX_PID" && status=0 || status=$?
-echo "desktop: a service exited with status $status; shutting down" >&2
-shutdown 1
+# Bounded stop: TERM the supervisors and every other process (dbus-launch
+# ignores TERM), give them a second, then KILL what is left and exit 0 well
+# inside Railway's stop window.
+shutdown() {
+  trap '' TERM INT
+  kill "${PIDS[@]}" 2>/dev/null || true
+  kill -TERM -1 2>/dev/null || true
+  sleep 1
+  kill -KILL -1 2>/dev/null || true
+  exit 0
+}
+trap shutdown TERM INT
+while :; do wait || true; sleep 1; done
