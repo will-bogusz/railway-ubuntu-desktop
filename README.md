@@ -2,6 +2,8 @@
 
 Image behind the Railway template **Ubuntu Desktop (Browser)** (`railway.com/deploy/ubuntu-desktop`). Ubuntu 24.04 + XFCE served by KasmVNC 1.5.0 (browser-only web client) behind nginx basic auth on `$PORT`, Firefox from Mozilla's apt repo, `/home/dev` on a volume, `/healthz` open.
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/ubuntu-desktop?referralCode=MYUCwz)
+
 ## Runtime contract
 
 | variable | required | meaning |
