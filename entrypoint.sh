@@ -5,7 +5,9 @@
 # XFCE session and nginx each run under a respawn loop: Log Out from the XFCE
 # menu starts a fresh session, and a killed process comes back instead of
 # taking the container down (Railway records every exit after a kill as a
-# crash). The container stops only on SIGTERM. Never prints a secret.
+# crash). desktop-oomadj (oomadj.sh) keeps `railway ssh` sessions from being
+# shielded from the OOM killer, so a memory hog started there dies instead of
+# these loops. The container stops only on SIGTERM. Never prints a secret.
 set -euo pipefail
 
 HOME_DIR=/home/dev
@@ -145,6 +147,7 @@ run_session() {
     >/dev/stderr 2>&1
 }
 
+supervise oomadj /usr/local/bin/desktop-oomadj
 supervise Xvnc run_xvnc
 for i in $(seq 1 50); do [ -S "$X_SOCKET" ] && break; sleep 0.2; done
 [ -S "$X_SOCKET" ] || fail "Xvnc did not start"

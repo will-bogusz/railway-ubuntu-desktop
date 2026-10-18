@@ -52,7 +52,8 @@ RUN userdel -r ubuntu \
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY xstartup /etc/devbox/xstartup
-RUN chmod 0755 /usr/local/bin/entrypoint.sh /etc/devbox/xstartup
+COPY oomadj.sh /usr/local/bin/desktop-oomadj
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /etc/devbox/xstartup /usr/local/bin/desktop-oomadj
 
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
