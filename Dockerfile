@@ -17,6 +17,12 @@ RUN set -eu; \
     curl -fsSLo kasmvnc.deb "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_noble_${KASMVNC_VERSION}_amd64.deb"; \
     echo "${KASMVNC_SHA256}  kasmvnc.deb" | sha256sum -c -
 
+# liboomguard.so (see oomguard.c); the runtime image needs no compiler for it.
+FROM ubuntu:24.04@${UBUNTU_DIGEST} AS oomguard
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+COPY oomguard.c /src/oomguard.c
+RUN gcc -shared -fPIC -O2 -Wall -Werror -o /src/liboomguard.so /src/oomguard.c
+
 FROM ubuntu:24.04@${UBUNTU_DIGEST}
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 TERM=xterm-256color
 
@@ -54,6 +60,12 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY xstartup /etc/devbox/xstartup
 COPY oomadj.sh /usr/local/bin/desktop-oomadj
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /etc/devbox/xstartup /usr/local/bin/desktop-oomadj
+
+# Preload last. Smoke test: every program still runs with it present.
+COPY --from=oomguard /src/liboomguard.so /usr/local/lib/liboomguard.so
+RUN chmod 0644 /usr/local/lib/liboomguard.so \
+ && echo /usr/local/lib/liboomguard.so > /etc/ld.so.preload \
+ && bash -c 'cat /proc/self/oom_score_adj' && python3 -c pass && sudo -n true
 
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
